@@ -82,41 +82,20 @@
 </div>
 
 <%-- ─── Google Identity Services (GSI) Script ───────────────── --%>
-<%-- 1.1.2 → 1.1.4: Google xử lý xác thực và trả về credential  --%>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
     function handleGoogleLogin() {
-        // 1.1.2 — Chuyển hướng đến màn hình xác thực của Google
-        // 1.1.3 — Actor chọn tài khoản và ủy quyền
-        // ⚠️  Thay YOUR_GOOGLE_CLIENT_ID bằng Client ID thật
-        google.accounts.id.initialize({
-            client_id: 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com',
-            callback: function(response) {
-                // 1.1.4 — Google trả về credential (ID Token)
-                submitGoogleToken(response.credential);
-            }
-        });
-        google.accounts.id.prompt();
-    }
+        const clientId = '551138929631-6rbmqqdg881t3bfaiplf8k296t3sku9b.apps.googleusercontent.com';
+        const redirectUri = 'http://localhost:8080/login_app/login';
+        const scope = 'openid email profile';
+        const state = Math.random().toString(36).substring(2); // chống CSRF
 
-    function submitGoogleToken(idToken) {
-        // 1.1.5 — Gửi ID Token lên server để xác thực
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = '${pageContext.request.contextPath}/login';
-
-        const typeInput = document.createElement('input');
-        typeInput.name = 'loginType';
-        typeInput.value = 'google';
-
-        const tokenInput = document.createElement('input');
-        tokenInput.name = 'idToken';
-        tokenInput.value = idToken;
-
-        form.appendChild(typeInput);
-        form.appendChild(tokenInput);
-        document.body.appendChild(form);
-        form.submit();
+        window.location.href =
+            'https://accounts.google.com/o/oauth2/v2/auth' +
+            '?client_id=' + clientId +
+            '&redirect_uri=' + encodeURIComponent(redirectUri) +
+            '&response_type=code' +
+            '&scope=' + encodeURIComponent(scope) +
+            '&state=' + state;
     }
 </script>
 </body>

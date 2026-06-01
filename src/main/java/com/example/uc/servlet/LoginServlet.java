@@ -38,6 +38,17 @@ public class LoginServlet extends HttpServlet {
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp)
             throws ServletException, IOException {
+
+        String code = req.getParameter("code");
+
+        if (code != null) {
+            // Google redirect về với authorization code
+            req.setCharacterEncoding("UTF-8");
+            handleGoogleLoginWithCode(code, req, resp);
+            return;
+        }
+
+        // Hiển thị form đăng nhập bình thường
         req.getRequestDispatcher("/WEB-INF/login.jsp").forward(req, resp);
     }
 
@@ -234,6 +245,57 @@ public class LoginServlet extends HttpServlet {
             resp.sendRedirect(contextPath + "/admin/dashboard");
         } else {
             resp.sendRedirect(contextPath + "/home");
+        }
+    }
+
+    private void handleGoogleLoginWithCode(String code,
+                                           HttpServletRequest req, HttpServletResponse resp)
+            throws ServletException, IOException {
+        try {
+            // Đổi code lấy token và decode payload
+            Map<String, String> payload;
+            try {
+                payload = GoogleOAuthUtil.exchangeCodeAndVerify(code);
+            } catch (SecurityException e) {
+                getServletContext().log("OAuth Error: " + e.getMessage());
+                userDAO.insertLog(new ActivityLog(null, "OAUTH_ERROR",
+                        "Xác thực Google thất bại: " + e.getMessage()));
+                req.setAttribute("error", "Xác thực Google thất bại. Vui lòng thử lại.");
+                req.getRequestDispatcher("/WEB-INF/login.jsp").forward(req, resp);
+                return;
+            }
+
+            String email    = payload.get("email");
+            String fullName = payload.get("name");
+
+            User user = userDAO.findByEmailAndProvider(email, "GOOGLE");
+
+            if (user == null) {
+                user = userDAO.createGoogleUser(email, fullName);
+                createSession(req, user);
+                userDAO.insertLog(new ActivityLog(user.getId(), "GOOGLE_REGISTER",
+                        "Đăng ký mới tự động qua Google: " + email));
+                resp.sendRedirect(req.getContextPath() + "/home");
+                return;
+            }
+
+            if ("LOCKED".equals(user.getStatus())) {
+                userDAO.insertLog(new ActivityLog(user.getId(), "ACCOUNT_LOCKED_ACCESS",
+                        "Cố gắng đăng nhập Google vào tài khoản bị khóa: " + email));
+                req.setAttribute("error", "Tài khoản đã bị khóa. Vui lòng liên hệ quản trị viên.");
+                req.getRequestDispatcher("/WEB-INF/login.jsp").forward(req, resp);
+                return;
+            }
+
+            createSession(req, user);
+            userDAO.insertLog(new ActivityLog(user.getId(), "LOGIN_SUCCESS",
+                    "Đăng nhập thành công qua Google: " + email));
+            redirectByRole(req, user, resp);
+
+        } catch (SQLException e) {
+            getServletContext().log("DB Error handleGoogleLoginWithCode: " + e.getMessage(), e);
+            req.setAttribute("error", "Hệ thống đang gặp sự cố. Vui lòng thử lại sau.");
+            req.getRequestDispatcher("/WEB-INF/login.jsp").forward(req, resp);
         }
     }
 }

@@ -109,7 +109,7 @@ public class GoogleOAuthUtil {
     }
 
     /**
-     * Giữ lại method cũ cho backward compatibility (demo mode)
+     * 1.1.5/6 kiểm tra và lấy thông tin người dùng
      */
     public static Map<String, String> verifyIdToken(String idTokenString)
             throws SecurityException {

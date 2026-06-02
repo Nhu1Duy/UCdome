@@ -11,6 +11,7 @@
     <div class="login-card">
         <div class="login-header">
             <h1>✅ Đăng nhập thành công</h1>
+            <h1>✅ Đây là trang bán hàng</h1>
         </div>
         <p style="text-align:center">
             Xin chào, <strong><%= session.getAttribute("fullName") %></strong>

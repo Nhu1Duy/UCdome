@@ -74,9 +74,9 @@
 
         <div class="demo-info">
             <strong>Tài khoản demo:</strong><br>
-            Admin: <code>admin@nlu.edu.vn</code> / <code>admin123</code><br>
-            User:  <code>user@nlu.edu.vn</code>  / <code>user123</code><br>
-            Locked: <code>locked@nlu.edu.vn</code> / <code>admin123</code>
+            Admin: <code>admin@example.com</code> / <code>123123</code><br>
+            User:  <code>user1@example.com</code>  / <code>123123</code><br>
+            Locked: <code>locked@example.com</code> / <code>123123</code>
         </div>
     </div>
 </div>

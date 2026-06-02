@@ -1,5 +1,9 @@
 package com.example.uc.model;
 
+import com.example.uc.util.BCryptUtil;
+
+import java.util.Scanner;
+
 /**
  * Model ánh xạ bảng Users trong CSDL
  * Dùng trong: Basic Flow 1.0.4, 1.0.5, 1.0.7

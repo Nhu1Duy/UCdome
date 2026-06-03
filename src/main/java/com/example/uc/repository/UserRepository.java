@@ -7,8 +7,10 @@ import com.example.uc.model.User;
 import com.example.uc.model.User.AuthProvider;
 import com.example.uc.model.User.Role;
 import com.example.uc.model.User.Status;
+import com.example.uc.util.BCryptUtil;
 
 import java.sql.*;
+import java.time.LocalDate;
 
 public class UserRepository {
 
@@ -88,9 +90,10 @@ public class UserRepository {
     //  CẬP NHẬT TRẠNG THÁI ĐĂNG NHẬP
     // ════════════════════════════════════════════════════════════════
 
-    /** 1.0.6 — Reset bộ đếm sai mật khẩu về 0 sau khi đăng nhập thành công. */
+    /** 1.0.6 — Reset bộ đếm sai mật khẩu về 0 và cập nhật last_login_at sau khi đăng nhập thành công. */
     public void resetFailedAttempts(int userId) {
-        final String sql = "UPDATE users SET failed_login_attempts = 0 WHERE id = ?";
+        final String sql =
+                "UPDATE users SET failed_login_attempts = 0, last_login_at = NOW() WHERE id = ?";
 
         try (Connection conn = DatabaseConfig.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -139,21 +142,22 @@ public class UserRepository {
 
     /**
      * 1.2.1 → 1.2.3 — Tự động tạo tài khoản từ thông tin Google.
-     * Gán role=USER (BR-03), status=ACTIVE, provider=GOOGLE.
+     * Gán role=USER (BR-03), status=ACTIVE, provider=GOOGLE, country=Vietnam (default).
      */
     public User createGoogleUser(String email, String fullName) {
         final String sql =
-                "INSERT INTO users (email, role, status, auth_provider, full_name) " +
-                        "VALUES (?, ?, ?, ?, ?)";
+                "INSERT INTO users (email, role, status, auth_provider, full_name, country) " +
+                        "VALUES (?, ?, ?, ?, ?, ?)";
 
         try (Connection conn = DatabaseConfig.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
 
             ps.setString(1, email);
-            ps.setString(2, Role.USER.name());          // enum → String
-            ps.setString(3, Status.ACTIVE.name());      // enum → String
+            ps.setString(2, Role.USER.name());           // enum → String
+            ps.setString(3, Status.ACTIVE.name());       // enum → String
             ps.setString(4, AuthProvider.GOOGLE.name()); // enum → String
             ps.setString(5, fullName);
+            ps.setString(6, "Vietnam");                  // default country
             ps.executeUpdate();
 
             try (ResultSet keys = ps.getGeneratedKeys()) {
@@ -175,10 +179,15 @@ public class UserRepository {
     //  GHI LOG
     // ════════════════════════════════════════════════════════════════
 
-    /** Ghi ActivityLog — caller dùng safeInsertLog để không chặn luồng chính. */
+    /**
+     * Ghi ActivityLog với đầy đủ các fields: ip_address, user_agent,
+     * entity_type, entity_id — caller dùng safeInsertLog để không chặn luồng chính.
+     */
     public void insertLog(ActivityLog log) {
         final String sql =
-                "INSERT INTO activity_log (user_id, action, description) VALUES (?, ?, ?)";
+                "INSERT INTO activity_log " +
+                        "(user_id, action, description, ip_address, user_agent, entity_type, entity_id) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)";
 
         try (Connection conn = DatabaseConfig.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -190,6 +199,35 @@ public class UserRepository {
             }
             ps.setString(2, log.getAction());
             ps.setString(3, log.getDescription());
+
+            // ip_address — nullable
+            if (log.getIpAddress() != null) {
+                ps.setString(4, log.getIpAddress());
+            } else {
+                ps.setNull(4, Types.VARCHAR);
+            }
+
+            // user_agent — nullable
+            if (log.getUserAgent() != null) {
+                ps.setString(5, log.getUserAgent());
+            } else {
+                ps.setNull(5, Types.VARCHAR);
+            }
+
+            // entity_type — nullable
+            if (log.getEntityType() != null) {
+                ps.setString(6, log.getEntityType());
+            } else {
+                ps.setNull(6, Types.VARCHAR);
+            }
+
+            // entity_id — nullable
+            if (log.getEntityId() != null) {
+                ps.setInt(7, log.getEntityId());
+            } else {
+                ps.setNull(7, Types.INTEGER);
+            }
+
             ps.executeUpdate();
 
         } catch (SQLException e) {
@@ -202,17 +240,44 @@ public class UserRepository {
     //  PRIVATE HELPER
     // ════════════════════════════════════════════════════════════════
 
-    /** Ánh xạ ResultSet → User, dùng enum factory method `from()`. */
+    /** Ánh xạ ResultSet → User, dùng enum factory method `from()` và tất cả fields mới. */
     private User mapRow(ResultSet rs) throws SQLException {
         User u = new User();
         u.setId(rs.getInt("id"));
         u.setEmail(rs.getString("email"));
         u.setPasswordHash(rs.getString("password_hash"));
-        u.setRole(rs.getString("role"));           // gọi setRole(String) → Role.from()
-        u.setStatus(rs.getString("status"));       // gọi setStatus(String) → Status.from()
+        u.setRole(rs.getString("role"));                     // → Role.from()
+        u.setStatus(rs.getString("status"));                 // → Status.from()
         u.setFailedLoginAttempts(rs.getInt("failed_login_attempts"));
-        u.setAuthProvider(rs.getString("auth_provider")); // → AuthProvider.from()
+        u.setAuthProvider(rs.getString("auth_provider"));    // → AuthProvider.from()
         u.setFullName(rs.getString("full_name"));
+        u.setPhone(rs.getString("phone"));
+        u.setAvatarUrl(rs.getString("avatar_url"));
+
+        // date_of_birth — dùng getDate, chuyển sang LocalDate
+        Date dob = rs.getDate("date_of_birth");
+        if (dob != null) u.setDateOfBirth(dob.toLocalDate());
+
+        u.setGender(rs.getString("gender"));                 // → Gender.from()
+        u.setAddressLine(rs.getString("address_line"));
+        u.setCity(rs.getString("city"));
+        u.setProvince(rs.getString("province"));
+        u.setCountry(rs.getString("country"));
+
+        // Timestamp fields — nullable, dùng getTimestamp → toLocalDateTime
+        Timestamp lastLogin = rs.getTimestamp("last_login_at");
+        if (lastLogin != null) u.setLastLoginAt(lastLogin.toLocalDateTime());
+
+        Timestamp createdAt = rs.getTimestamp("created_at");
+        if (createdAt != null) u.setCreatedAt(createdAt.toLocalDateTime());
+
+        Timestamp updatedAt = rs.getTimestamp("updated_at");
+        if (updatedAt != null) u.setUpdatedAt(updatedAt.toLocalDateTime());
+
         return u;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(BCryptUtil.hashPassword("123123"));
     }
 }

@@ -91,7 +91,8 @@ public class LoginServlet extends HttpServlet {
         }
 
         try {
-            User user = authService.loginWithEmailPassword(email, password);
+            User user = authService.loginWithEmailPassword(
+                    email, password, getClientIp(req), getClientUserAgent(req));
             createSession(req, user);
             redirectByRole(req, user, resp);
 
@@ -158,7 +159,8 @@ public class LoginServlet extends HttpServlet {
         String fullName = payload.get("name");
 
         try {
-            User user = authService.loginWithGoogle(email, fullName);
+            User user = authService.loginWithGoogle(
+                    email, fullName, getClientIp(req), getClientUserAgent(req));
             createSession(req, user);
             redirectByRole(req, user, resp);
 
@@ -175,16 +177,18 @@ public class LoginServlet extends HttpServlet {
 
     // ════════════════════════════════════════════════════════════════
     //  Helper: 1.0.8 — Khởi tạo session (chống Session Fixation)
+    //  Lưu thêm avatarUrl để hiển thị trên UI
     // ════════════════════════════════════════════════════════════════
     private void createSession(HttpServletRequest req, User user) {
         HttpSession old = req.getSession(false);
         if (old != null) old.invalidate();
 
         HttpSession session = req.getSession(true);
-        session.setAttribute("userId",    user.getId());
-        session.setAttribute("userEmail", user.getEmail());
-        session.setAttribute("userRole",  user.getRole().name()); // enum → String cho session
-        session.setAttribute("fullName",  user.getFullName());
+        session.setAttribute("userId",     user.getId());
+        session.setAttribute("userEmail",  user.getEmail());
+        session.setAttribute("userRole",   user.getRole().name()); // enum → String cho session
+        session.setAttribute("fullName",   user.getFullName());
+        session.setAttribute("avatarUrl",  user.getAvatarUrl());   // thêm mới
         session.setMaxInactiveInterval(30 * 60);
     }
 
@@ -201,5 +205,31 @@ public class LoginServlet extends HttpServlet {
         } else {
             resp.sendRedirect(contextPath + "/home");
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Helper: lấy IP thực của client (hỗ trợ reverse proxy)
+    // ════════════════════════════════════════════════════════════════
+    private String getClientIp(HttpServletRequest req) {
+        String ip = req.getHeader("X-Forwarded-For");
+        if (ip != null && !ip.isBlank()) {
+            // X-Forwarded-For có thể chứa danh sách, lấy IP đầu tiên
+            return ip.split(",")[0].trim();
+        }
+        ip = req.getHeader("X-Real-IP");
+        if (ip != null && !ip.isBlank()) return ip.trim();
+        return req.getRemoteAddr();
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Helper: lấy User-Agent header
+    // ════════════════════════════════════════════════════════════════
+    private String getClientUserAgent(HttpServletRequest req) {
+        String ua = req.getHeader("User-Agent");
+        // Giới hạn độ dài để tránh lưu User-Agent quá dài vào DB
+        if (ua != null && ua.length() > 512) {
+            return ua.substring(0, 512);
+        }
+        return ua;
     }
 }

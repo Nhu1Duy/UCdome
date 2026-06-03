@@ -30,7 +30,12 @@ public class AuthService {
     //  BASIC FLOW — Đăng nhập Email / Mật khẩu (1.0.x)
     // ════════════════════════════════════════════════════════════════
 
-    public User loginWithEmailPassword(String email, String password) {
+    /**
+     * @param ipAddress  IP của client (lấy từ servlet, có thể null)
+     * @param userAgent  User-Agent header (có thể null)
+     */
+    public User loginWithEmailPassword(String email, String password,
+                                       String ipAddress, String userAgent) {
 
         // 1.0.4: Truy vấn CSDL
         User user = userRepository.findByEmail(email);
@@ -51,17 +56,19 @@ public class AuthService {
         // 1.0.5: Kiểm tra trạng thái — dùng enum, không so sánh String thô
         if (Status.LOCKED == user.getStatus()) {
             safeInsertLog(new ActivityLog(user.getId(), "ACCOUNT_LOCKED_ACCESS",
-                    "Cố gắng truy cập tài khoản bị khóa: " + email));
+                    "Cố gắng truy cập tài khoản bị khóa: " + email,
+                    ipAddress, userAgent));
             throw new AuthException(ErrorCode.ACCOUNT_LOCKED,
                     "Tài khoản đã bị khóa. Vui lòng liên hệ quản trị viên.");
         }
 
-        // 1.0.6: Reset bộ đếm
+        // 1.0.6: Reset bộ đếm + cập nhật last_login_at
         userRepository.resetFailedAttempts(user.getId());
 
         // 1.0.9: Ghi log thành công
         safeInsertLog(new ActivityLog(user.getId(), "LOGIN_SUCCESS",
-                "Đăng nhập thành công bằng tài khoản nội bộ: " + email));
+                "Đăng nhập thành công bằng tài khoản nội bộ: " + email,
+                ipAddress, userAgent));
 
         return user;
     }
@@ -70,7 +77,12 @@ public class AuthService {
     //  UC1.1 + UC1.2 — Đăng nhập / Tự đăng ký qua Google
     // ════════════════════════════════════════════════════════════════
 
-    public User loginWithGoogle(String email, String fullName) {
+    /**
+     * @param ipAddress  IP của client (có thể null)
+     * @param userAgent  User-Agent header (có thể null)
+     */
+    public User loginWithGoogle(String email, String fullName,
+                                String ipAddress, String userAgent) {
 
         // 1.1.7: Tìm theo email
         User user = userRepository.findByEmail(email);
@@ -83,20 +95,25 @@ public class AuthService {
 
         // Rẽ nhánh UC1.2: chưa có tài khoản Google
         if (user == null) {
-            return registerGoogleUser(email, fullName);
+            return registerGoogleUser(email, fullName, ipAddress, userAgent);
         }
 
         // UC1.1: Kiểm tra LOCKED
         if (Status.LOCKED == user.getStatus()) {
             safeInsertLog(new ActivityLog(user.getId(), "ACCOUNT_LOCKED_ACCESS",
-                    "Cố gắng đăng nhập Google vào tài khoản bị khóa: " + email));
+                    "Cố gắng đăng nhập Google vào tài khoản bị khóa: " + email,
+                    ipAddress, userAgent));
             throw new AuthException(ErrorCode.ACCOUNT_LOCKED,
                     "Tài khoản đã bị khóa. Vui lòng liên hệ quản trị viên.");
         }
 
+        // Reset last_login_at khi đăng nhập Google thành công
+        userRepository.resetFailedAttempts(user.getId());
+
         // 1.0.9: Ghi log thành công
         safeInsertLog(new ActivityLog(user.getId(), "LOGIN_SUCCESS",
-                "Đăng nhập thành công qua Google: " + email));
+                "Đăng nhập thành công qua Google: " + email,
+                ipAddress, userAgent));
 
         return user;
     }
@@ -105,11 +122,13 @@ public class AuthService {
     //  UC1.2 — Tự động đăng ký lần đầu qua Google
     // ════════════════════════════════════════════════════════════════
 
-    private User registerGoogleUser(String email, String fullName) {
+    private User registerGoogleUser(String email, String fullName,
+                                    String ipAddress, String userAgent) {
         User newUser = userRepository.createGoogleUser(email, fullName);
 
         safeInsertLog(new ActivityLog(newUser.getId(), "GOOGLE_REGISTER",
-                "Đăng ký mới tự động qua Google: " + email));
+                "Đăng ký mới tự động qua Google: " + email,
+                ipAddress, userAgent));
 
         return newUser;
     }

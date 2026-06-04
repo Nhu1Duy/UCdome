@@ -38,7 +38,7 @@
 
         <div style="display:flex;flex-direction:column;gap:10px">
 
-            <a href="#"
+            <a href="${pageContext.request.contextPath}/admin/users"
                class="btn btn-primary"
                style="text-decoration:none;text-align:center">
                 Quản lý người dùng

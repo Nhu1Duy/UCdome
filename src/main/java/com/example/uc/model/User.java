@@ -3,6 +3,14 @@ package com.example.uc.model;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
+/**
+ * Model User — ánh xạ bảng `users` trong CSDL.
+ *
+ * Thay đổi UC-08:
+ *   • Thêm trường `username`  (BR-03: unique)
+ *   • Thêm trường `deletedAt` (soft-delete — UC8.3)
+ *   • Thêm trường `deletedBy` (admin nào đã xoá — BR-05 audit)
+ */
 public class User {
 
     // ── Enums ────────────────────────────────────────────────────────
@@ -38,6 +46,7 @@ public class User {
     // ── Fields ───────────────────────────────────────────────────────
 
     private int           id;
+    private String        username;
     private String        email;
     private String        passwordHash;
     private Role          role;
@@ -53,6 +62,8 @@ public class User {
     private String        city;
     private String        province;
     private String        country;
+    private LocalDateTime deletedAt;
+    private Integer       deletedBy;
     private LocalDateTime lastLoginAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -77,6 +88,9 @@ public class User {
 
     public int getId()                              { return id; }
     public void setId(int id)                       { this.id = id; }
+
+    public String getUsername()                     { return username; }
+    public void setUsername(String username)        { this.username = username; }
 
     public String getEmail()                        { return email; }
     public void setEmail(String email)              { this.email = email; }
@@ -129,6 +143,14 @@ public class User {
 
     public LocalDateTime getLastLoginAt()           { return lastLoginAt; }
     public void setLastLoginAt(LocalDateTime t)     { this.lastLoginAt = t; }
+
+    public LocalDateTime getDeletedAt()             { return deletedAt; }
+    public void setDeletedAt(LocalDateTime t)       { this.deletedAt = t; }
+
+    public Integer getDeletedBy()                   { return deletedBy; }
+    public void setDeletedBy(Integer id)            { this.deletedBy = id; }
+
+    public boolean isDeleted()                      { return deletedAt != null; }
 
     public LocalDateTime getCreatedAt()             { return createdAt; }
     public void setCreatedAt(LocalDateTime t)       { this.createdAt = t; }

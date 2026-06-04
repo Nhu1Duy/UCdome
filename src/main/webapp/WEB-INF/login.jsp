@@ -56,7 +56,22 @@
 
             <%-- 1.0.2 — Nhấn nút Đăng nhập → POST /login --%>
             <button type="submit" class="btn btn-primary">Đăng nhập</button>
+
+            <%-- UC-03 Trigger: Liên kết "Quên mật khẩu" → /forgot-password --%>
+            <div style="text-align:right;margin-top:8px">
+                <a href="${pageContext.request.contextPath}/forgot-password"
+                   style="font-size:.85rem;color:#1a7a4a;text-decoration:none">
+                    Quên mật khẩu?
+                </a>
+            </div>
         </form>
+
+        <%-- 3.0.19: Thông báo đặt lại mật khẩu thành công (redirect từ /reset-password) --%>
+        <% if ("true".equals(request.getParameter("resetSuccess"))) { %>
+            <div class="alert" style="background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;margin-top:12px">
+                ✅ Mật khẩu đã được đặt lại thành công. Vui lòng đăng nhập lại.
+            </div>
+        <% } %>
 
         <div class="divider"><span>hoặc</span></div>
 

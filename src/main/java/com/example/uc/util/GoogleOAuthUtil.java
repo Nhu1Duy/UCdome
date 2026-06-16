@@ -9,8 +9,8 @@ import java.util.Base64;
 
 public class GoogleOAuthUtil {
 
-    private static final String CLIENT_ID     = "...";
-    private static final String CLIENT_SECRET = "...";
+    private static final String CLIENT_ID     = "551138929631-6rbmqqdg881t3bfaiplf8k296t3sku9b.apps.googleusercontent.com";
+    private static final String CLIENT_SECRET = "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"; // ← lấy từ Google Console
     private static final String REDIRECT_URI  = "http://localhost:8080/login_app/login";
 
     public static GoogleTokenPayloadDTO exchangeCodeAndVerify(String code)

@@ -20,10 +20,21 @@ import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 
 /**
- *  LoginServlet — UC-01: Đăng nhập hệ thống (Email/Mật khẩu + Google)
- *  Phụ thuộc   : AuthService    — xử lý nghiệp vụ đăng nhập
- *                GoogleOAuthUtil — xác thực token/code Google
- *                ValidationUtil  — validate email/password đầu vào
+ * LoginServlet — UC-01: Đăng nhập hệ thống
+ *
+ * Các flow được hỗ trợ:
+ *   BASIC FLOW  (UC1.0) — Đăng nhập bằng Email / Mật khẩu (doPost)
+ *   ALT FLOW    (UC1.1) — Đăng nhập bằng Google qua Authorization Code Flow (doGet)
+ *
+ * Lưu ý: Flow ID Token (doPost + idToken) đã bị loại bỏ.
+ *   Nút "Đăng nhập bằng Google" trong login.jsp redirect trực tiếp tới
+ *   Google với response_type=code; Google callback về GET /login?code=...
+ *   nên toàn bộ xác thực Google đi qua doGet → handleGoogleCodeFlow().
+ *
+ * Phụ thuộc:
+ *   AuthService     — xử lý nghiệp vụ đăng nhập / tự động đăng ký
+ *   GoogleOAuthUtil — exchange authorization code lấy ID Token, decode JWT
+ *   ValidationUtil  — validate email / password đầu vào
  */
 @WebServlet(name = "LoginServlet", urlPatterns = {"/login"})
 public class LoginServlet extends HttpServlet {
@@ -35,6 +46,11 @@ public class LoginServlet extends HttpServlet {
         authService = new AuthService(new UserRepository());
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  doGet — xử lý hai trường hợp:
+    //    (a) GET /login            → hiển thị form đăng nhập   (1.0.1)
+    //    (b) GET /login?code=...   → Google callback, Code Flow (1.1.4)
+    // ════════════════════════════════════════════════════════════════
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp)
             throws ServletException, IOException {
@@ -42,32 +58,30 @@ public class LoginServlet extends HttpServlet {
         req.setCharacterEncoding("UTF-8");
         String code = req.getParameter("code");
 
-        // 1.1.4 (Alt) — Có authorization code từ Google → xử lý Code Flow
         if (code != null) {
-            handleGoogleLoginWithCode(code, req, resp);
-            return;
+            // 1.1.4 — Google redirect về kèm authorization code → xử lý Code Flow
+            handleGoogleCodeFlow(code, req, resp);
+        } else {
+            // 1.0.1 — Không có code → hiển thị form đăng nhập
+            req.getRequestDispatcher("/WEB-INF/login.jsp").forward(req, resp);
         }
-
-        // 1.0.1 (Basic) — Không có code → hiển thị form đăng nhập
-        req.getRequestDispatcher("/WEB-INF/login.jsp").forward(req, resp);
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  doPost — chỉ xử lý BASIC FLOW: đăng nhập Email / Mật khẩu
+    // ════════════════════════════════════════════════════════════════
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp)
             throws ServletException, IOException {
 
         req.setCharacterEncoding("UTF-8");
-        String loginType = req.getParameter("loginType");
-
-        // 1.1.2 (Alt) — Nút Google được nhấn → ID Token flow
-        if ("google".equals(loginType)) {
-            handleGoogleLogin(req, resp);
-        } else {
-            // 1.0.2 (Basic) — Form email/password được submit
-            handleLocalLogin(req, resp);
-        }
+        // 1.0.2 — Form email/password được submit → xử lý đăng nhập nội bộ
+        handleLocalLogin(req, resp);
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  BASIC FLOW — UC1.0: Đăng nhập bằng Email / Mật khẩu
+    // ════════════════════════════════════════════════════════════════
     private void handleLocalLogin(HttpServletRequest req, HttpServletResponse resp)
             throws ServletException, IOException {
 
@@ -92,7 +106,7 @@ public class LoginServlet extends HttpServlet {
                 email, password, getClientIp(req), getClientUserAgent(req));
 
         try {
-            // 1.0.5→1.0.10 — Ủy quyền toàn bộ nghiệp vụ xác thực cho AuthService
+            // 1.0.5 → 1.0.10 — Ủy quyền toàn bộ nghiệp vụ xác thực cho AuthService
             LoginResponseDTO response = authService.loginWithEmailPassword(loginDto);
 
             // 1.0.11 — Đăng nhập thành công → tạo session mới (hủy session cũ trước)
@@ -114,30 +128,26 @@ public class LoginServlet extends HttpServlet {
         }
     }
 
-    private void handleGoogleLogin(HttpServletRequest req, HttpServletResponse resp)
-            throws ServletException, IOException {
-
-        // 1.1.3 — Đọc idToken từ form (được JS SDK điền vào hidden input)
-        String idTokenString = req.getParameter("idToken");
-
-        GoogleTokenPayloadDTO payload;
-        try {
-            // 1.1.5 — Xác thực và decode ID Token → lấy email + name
-            payload = GoogleOAuthUtil.verifyIdToken(idTokenString);
-        } catch (SecurityException e) {
-            // 1.1-E1 — Token không hợp lệ → log và báo lỗi người dùng
-            getServletContext().log("OAuth Error verifyIdToken: " + e.getMessage());
-            req.setAttribute("error", "Xác thực qua tài khoản Google thất bại. Vui lòng thử lại.");
-            req.getRequestDispatcher("/WEB-INF/login.jsp").forward(req, resp);
-            return;
-        }
-
-        // 1.1.6 — Có payload hợp lệ → xử lý nghiệp vụ đăng nhập/đăng ký Google
-        processGoogleUser(payload, req, resp);
-    }
-
-    private void handleGoogleLoginWithCode(String code,
-                                           HttpServletRequest req, HttpServletResponse resp)
+    // ════════════════════════════════════════════════════════════════
+    //  ALT FLOW — UC1.1: Đăng nhập bằng Google (Authorization Code Flow)
+    //
+    //  Trigger : GET /login?code=<authorization_code>
+    //            (Google redirect sau khi người dùng đồng ý cấp quyền)
+    //
+    //  Bước:
+    //    1.1.4  — Nhận authorization code từ query param "code"
+    //    1.1.4b — Gọi GoogleOAuthUtil.exchangeCodeAndVerify():
+    //               POST tới https://oauth2.googleapis.com/token
+    //               nhận id_token trong response JSON
+    //               decode JWT payload → lấy email + name
+    //    1.1.5  — Có GoogleTokenPayloadDTO hợp lệ
+    //    1.1.6  → 1.1.13 — Ủy quyền nghiệp vụ cho processGoogleUser()
+    //
+    //  Exception:
+    //    1.1-E1 — exchange thất bại hoặc JWT lỗi → log, báo lỗi người dùng
+    // ════════════════════════════════════════════════════════════════
+    private void handleGoogleCodeFlow(String code,
+                                      HttpServletRequest req, HttpServletResponse resp)
             throws ServletException, IOException {
 
         GoogleTokenPayloadDTO payload;
@@ -152,10 +162,27 @@ public class LoginServlet extends HttpServlet {
             return;
         }
 
-        // 1.1.4c — Có payload hợp lệ → xử lý nghiệp vụ đăng nhập/đăng ký Google
+        // 1.1.5 — Có payload hợp lệ → xử lý nghiệp vụ đăng nhập / đăng ký Google
         processGoogleUser(payload, req, resp);
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  Xử lý nghiệp vụ Google sau khi có payload hợp lệ
+    //  Dùng chung cho cả UC1.1 (tài khoản đã tồn tại) và UC1.2 (tự đăng ký)
+    //
+    //  Bước:
+    //    1.1.7       — Đóng gói GoogleLoginRequestDTO (email, name, ip, userAgent)
+    //    1.1.8→1.1.13 — AuthService.loginWithGoogle() quyết định:
+    //                     UC1.1: tài khoản GOOGLE đã có → cập nhật last_login_at, ghi log
+    //                     UC1.2: chưa có → INSERT user mới (role=USER, status=ACTIVE,
+    //                            provider=GOOGLE), ghi log GOOGLE_REGISTER
+    //    1.1.14      — Thành công → tạo session mới (hủy session cũ trước)
+    //    1.1.15      — Điều hướng theo role
+    //
+    //  Exception:
+    //    1.1-E2 — Email đã đăng ký bằng LOCAL → yêu cầu dùng mật khẩu
+    //    1.1-E3 — Tài khoản Google bị khóa    → ghi log, từ chối
+    // ════════════════════════════════════════════════════════════════
     private void processGoogleUser(GoogleTokenPayloadDTO payload,
                                    HttpServletRequest req, HttpServletResponse resp)
             throws ServletException, IOException {
@@ -166,7 +193,7 @@ public class LoginServlet extends HttpServlet {
                 getClientIp(req), getClientUserAgent(req));
 
         try {
-            // 1.1.8→1.1.13 — Ủy quyền nghiệp vụ: đăng nhập (UC1.1) hoặc đăng ký (UC1.2)
+            // 1.1.8 → 1.1.13 — Ủy quyền nghiệp vụ: đăng nhập (UC1.1) hoặc đăng ký (UC1.2)
             LoginResponseDTO response = authService.loginWithGoogle(googleDto);
 
             // 1.1.14 — Thành công → tạo session mới (hủy session cũ trước)
@@ -188,9 +215,15 @@ public class LoginServlet extends HttpServlet {
         }
     }
 
-    //  1.0.11 / 1.1.14 — Tạo HTTP Session sau đăng nhập thành công
+    // ════════════════════════════════════════════════════════════════
+    //  Helpers dùng chung
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 1.0.11 / 1.1.14 — Tạo HTTP Session sau đăng nhập thành công.
+     * Hủy session cũ trước khi tạo mới để chống Session Fixation Attack.
+     */
     private void createSession(HttpServletRequest req, LoginResponseDTO response) {
-        // Hủy session cũ trước khi tạo mới → chống Session Fixation
         HttpSession old = req.getSession(false);
         if (old != null) old.invalidate();
 
@@ -203,7 +236,11 @@ public class LoginServlet extends HttpServlet {
         session.setMaxInactiveInterval(30 * 60);
     }
 
-    //  1.0.12 / 1.1.15 — Điều hướng sau đăng nhập theo role
+    /**
+     * 1.0.12 / 1.1.15 — Điều hướng sau đăng nhập theo role.
+     *   ADMIN → /admin/dashboard
+     *   USER  → /home
+     */
     private void redirectByRole(HttpServletRequest req, LoginResponseDTO response,
                                 HttpServletResponse resp) throws IOException {
         String contextPath = req.getContextPath();
@@ -214,8 +251,10 @@ public class LoginServlet extends HttpServlet {
         }
     }
 
-    //  Helper — Lấy IP thực của client
-    //  Dùng tại: 1.0.5 (handleLocalLogin), 1.1.7 (processGoogleUser)
+    /**
+     * Helper — Lấy IP thực của client.
+     * Ưu tiên header X-Forwarded-For (qua reverse proxy) trước getRemoteAddr().
+     */
     private String getClientIp(HttpServletRequest req) {
         String ip = req.getHeader("X-Forwarded-For");
         if (ip != null && !ip.isBlank()) return ip.split(",")[0].trim();
@@ -224,8 +263,9 @@ public class LoginServlet extends HttpServlet {
         return req.getRemoteAddr();
     }
 
-    //  Helper — Lấy và cắt ngắn User-Agent header
-    //  Dùng tại: 1.0.5 (handleLocalLogin), 1.1.7 (processGoogleUser)
+    /**
+     * Helper — Lấy và cắt ngắn User-Agent header (tối đa 512 ký tự).
+     */
     private String getClientUserAgent(HttpServletRequest req) {
         String ua = req.getHeader("User-Agent");
         if (ua != null && ua.length() > 512) return ua.substring(0, 512);

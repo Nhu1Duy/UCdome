@@ -1,5 +1,8 @@
 package com.example.uc.service;
 
+import com.example.uc.dto.GoogleLoginRequestDTO;
+import com.example.uc.dto.LoginRequestDTO;
+import com.example.uc.dto.LoginResponseDTO;
 import com.example.uc.exception.AuthException;
 import com.example.uc.exception.AuthException.ErrorCode;
 import com.example.uc.exception.DatabaseException;
@@ -10,14 +13,6 @@ import com.example.uc.model.User.Status;
 import com.example.uc.repository.UserRepository;
 import com.example.uc.util.BCryptUtil;
 
-/**
- * ═══════════════════════════════════════════════════════════════════
- *  AuthService — Tầng Service
- *
- *  Trách nhiệm: TOÀN BỘ logic nghiệp vụ của UC-01 (Đăng nhập hệ thống).
- *  KHÔNG biết HTTP (request/response) — nhận primitive / model, trả User.
- * ═══════════════════════════════════════════════════════════════════
- */
 public class AuthService {
 
     private final UserRepository userRepository;
@@ -26,117 +21,119 @@ public class AuthService {
         this.userRepository = userRepository;
     }
 
-    // ════════════════════════════════════════════════════════════════
-    //  BASIC FLOW — Đăng nhập Email / Mật khẩu (1.0.x)
-    // ════════════════════════════════════════════════════════════════
+    public LoginResponseDTO loginWithEmailPassword(LoginRequestDTO dto) {
 
-    /**
-     * @param ipAddress  IP của client (lấy từ servlet, có thể null)
-     * @param userAgent  User-Agent header (có thể null)
-     */
-    public User loginWithEmailPassword(String email, String password,
-                                       String ipAddress, String userAgent) {
+        // 1.0.6 — Tìm user theo email trong CSDL
+        User user = userRepository.findByEmail(dto.getEmail());
 
-        // 1.0.4: Truy vấn CSDL
-        User user = userRepository.findByEmail(email);
-
-        // 1.0-E2: Không tìm thấy email
+        // 1.0-E2a — Email không tồn tại → từ chối, không tiết lộ nguyên nhân cụ thể
         if (user == null) {
             throw new AuthException(ErrorCode.INVALID_CREDENTIALS,
                     "Email hoặc mật khẩu không chính xác.");
         }
 
-        // 1.0-E2: Sai mật khẩu
-        if (!BCryptUtil.checkPassword(password, user.getPasswordHash())) {
+        // 1.0.7 — Kiểm tra mật khẩu với BCrypt hash
+        if (!BCryptUtil.checkPassword(dto.getPassword(), user.getPasswordHash())) {
+            // 1.0-E2b — Mật khẩu sai → tăng bộ đếm, tự khóa nếu vượt ngưỡng
             safeIncreaseFailedAttempts(user.getId());
             throw new AuthException(ErrorCode.INVALID_CREDENTIALS,
                     "Email hoặc mật khẩu không chính xác.");
         }
 
-        // 1.0.5: Kiểm tra trạng thái — dùng enum, không so sánh String thô
+        // 1.0.8 — Kiểm tra trạng thái tài khoản
         if (Status.LOCKED == user.getStatus()) {
+            // 1.0-E3 — Tài khoản bị khóa → ghi log, từ chối đăng nhập
             safeInsertLog(new ActivityLog(user.getId(), "ACCOUNT_LOCKED_ACCESS",
-                    "Cố gắng truy cập tài khoản bị khóa: " + email,
-                    ipAddress, userAgent));
+                    "Cố gắng truy cập tài khoản bị khóa: " + dto.getEmail(),
+                    dto.getIpAddress(), dto.getUserAgent()));
             throw new AuthException(ErrorCode.ACCOUNT_LOCKED,
                     "Tài khoản đã bị khóa. Vui lòng liên hệ quản trị viên.");
         }
 
-        // 1.0.6: Reset bộ đếm + cập nhật last_login_at
+        // 1.0.9 — Đăng nhập hợp lệ → reset failed_attempts, cập nhật last_login_at
         userRepository.resetFailedAttempts(user.getId());
 
-        // 1.0.9: Ghi log thành công
+        // 1.0.10 — Ghi log đăng nhập thành công → trả DTO về Servlet
         safeInsertLog(new ActivityLog(user.getId(), "LOGIN_SUCCESS",
-                "Đăng nhập thành công bằng tài khoản nội bộ: " + email,
-                ipAddress, userAgent));
+                "Đăng nhập thành công bằng tài khoản nội bộ: " + dto.getEmail(),
+                dto.getIpAddress(), dto.getUserAgent()));
 
-        return user;
+        return new LoginResponseDTO(user);
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  UC1.1 + UC1.2 — Đăng nhập / Tự đăng ký qua Google
+    //  UC1.1/UC1.2 — Đăng nhập qua Google
+    //  ──────────────────────────────────────────────────────────────
+    //  ALTERNATIVE FLOW (UC1.1 — Tài khoản Google đã tồn tại):
+    //    1.1.9  — Tìm user theo email Google (UserRepository.findByEmail)
+    //    1.1.10 — Tài khoản tồn tại, kiểm tra provider ≠ LOCAL
+    //    1.1.11 — Kiểm tra trạng thái tài khoản (Status.LOCKED?)
+    //    1.1.12 — Cập nhật last_login_at (resetFailedAttempts)
+    //    1.1.13 — Ghi log đăng nhập Google thành công → trả DTO về Servlet
+    //
+    //  ALTERNATIVE FLOW (UC1.2 — Tự động đăng ký tài khoản mới):
+    //    1.1.9  — findByEmail trả null → chưa có tài khoản
+    //    1.2.1  — Gọi registerGoogleUser() → INSERT user mới (role=USER,
+    //             status=ACTIVE, provider=GOOGLE)
+    //    1.2.2  — Ghi log đăng ký Google (action = GOOGLE_REGISTER)
+    //    1.2.3  — Trả DTO về Servlet
+    //
+    //  EXCEPTION FLOW:
+    //    1.1-E2 — Email tồn tại nhưng provider = LOCAL
+    //             → AuthException(OAUTH_FAILED): yêu cầu dùng mật khẩu
+    //    1.1-E3 — Tài khoản Google bị khóa → ghi log, từ chối
+    //             → AuthException(ACCOUNT_LOCKED)
     // ════════════════════════════════════════════════════════════════
+    public LoginResponseDTO loginWithGoogle(GoogleLoginRequestDTO dto) {
 
-    /**
-     * @param ipAddress  IP của client (có thể null)
-     * @param userAgent  User-Agent header (có thể null)
-     */
-    public User loginWithGoogle(String email, String fullName,
-                                String ipAddress, String userAgent) {
+        // 1.1.9 — Tìm user theo email Google trong CSDL
+        User user = userRepository.findByEmail(dto.getEmail());
 
-        // 1.1.7: Tìm theo email
-        User user = userRepository.findByEmail(email);
-
-        // 1.1.8: Email tồn tại nhưng là LOCAL
+        // 1.1.9 / UC1.2 — Chưa có tài khoản Google → rẽ nhánh tự động đăng ký
+        if (user == null) {
+            return registerGoogleUser(dto);
+        }
+        // 1.1.10 / 1.1-E2 — Email đã đăng ký bằng LOCAL → không cho đăng nhập Google
         if (user != null && AuthProvider.LOCAL == user.getAuthProvider()) {
             throw new AuthException(ErrorCode.OAUTH_FAILED,
                     "Email này đã đăng ký bằng tài khoản hệ thống. Vui lòng đăng nhập bằng mật khẩu.");
         }
 
-        // Rẽ nhánh UC1.2: chưa có tài khoản Google
-        if (user == null) {
-            return registerGoogleUser(email, fullName, ipAddress, userAgent);
-        }
-
-        // UC1.1: Kiểm tra LOCKED
+        // 1.1.11 / 1.1-E3 — Tài khoản Google tồn tại nhưng đang bị khóa
         if (Status.LOCKED == user.getStatus()) {
             safeInsertLog(new ActivityLog(user.getId(), "ACCOUNT_LOCKED_ACCESS",
-                    "Cố gắng đăng nhập Google vào tài khoản bị khóa: " + email,
-                    ipAddress, userAgent));
+                    "Cố gắng đăng nhập Google vào tài khoản bị khóa: " + dto.getEmail(),
+                    dto.getIpAddress(), dto.getUserAgent()));
             throw new AuthException(ErrorCode.ACCOUNT_LOCKED,
                     "Tài khoản đã bị khóa. Vui lòng liên hệ quản trị viên.");
         }
 
-        // Reset last_login_at khi đăng nhập Google thành công
+        // 1.1.12 — Đăng nhập Google hợp lệ → cập nhật last_login_at
         userRepository.resetFailedAttempts(user.getId());
 
-        // 1.0.9: Ghi log thành công
+        // 1.1.13 — Ghi log đăng nhập Google thành công → trả DTO về Servlet
         safeInsertLog(new ActivityLog(user.getId(), "LOGIN_SUCCESS",
-                "Đăng nhập thành công qua Google: " + email,
-                ipAddress, userAgent));
+                "Đăng nhập thành công qua Google: " + dto.getEmail(),
+                dto.getIpAddress(), dto.getUserAgent()));
 
-        return user;
+        return new LoginResponseDTO(user);
     }
 
-    // ════════════════════════════════════════════════════════════════
-    //  UC1.2 — Tự động đăng ký lần đầu qua Google
-    // ════════════════════════════════════════════════════════════════
+    private LoginResponseDTO registerGoogleUser(GoogleLoginRequestDTO dto) {
 
-    private User registerGoogleUser(String email, String fullName,
-                                    String ipAddress, String userAgent) {
-        User newUser = userRepository.createGoogleUser(email, fullName);
+        // 1.2.1 — INSERT user mới vào DB với provider=GOOGLE
+        User newUser = userRepository.createGoogleUser(dto.getEmail(), dto.getFullName());
 
+        // 1.2.2 — Ghi log đăng ký tự động qua Google
         safeInsertLog(new ActivityLog(newUser.getId(), "GOOGLE_REGISTER",
-                "Đăng ký mới tự động qua Google: " + email,
-                ipAddress, userAgent));
+                "Đăng ký mới tự động qua Google: " + dto.getEmail(),
+                dto.getIpAddress(), dto.getUserAgent()));
 
-        return newUser;
+        // 1.2.3 — Trả DTO về loginWithGoogle() → Servlet tạo session
+        return new LoginResponseDTO(newUser);
     }
 
-    // ════════════════════════════════════════════════════════════════
-    //  PRIVATE HELPERS
-    // ════════════════════════════════════════════════════════════════
-
+    //  Helper — Tăng bộ đếm failed_attempts (dùng tại 1.0-E2b)
     private void safeIncreaseFailedAttempts(int userId) {
         try {
             userRepository.increaseFailedAttempts(userId);
@@ -146,6 +143,7 @@ public class AuthService {
         }
     }
 
+    //  Helper — Ghi ActivityLog an toàn (dùng tại 1.0.10, 1.0-E3, 1.1-E3, 1.2.2)
     private void safeInsertLog(ActivityLog log) {
         try {
             userRepository.insertLog(log);
